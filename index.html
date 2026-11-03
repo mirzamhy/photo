@@ -34,6 +34,7 @@
       <option value="block">Blok warna (bg)</option>
       <option value="matrix">Matrix hijau</option>
       <option value="mono">Hitam putih</option>
+      <option value="tricolor">Hijau-Biru-Merah</option>
     </select>
   </label>
   <label>Karakter
@@ -148,7 +149,9 @@ function frame() {
   const chars = [...RAMPS[ui.ramp.value]];
   const n = chars.length - 1;
   const k = +ui.contrast.value / 100;
-  const flip = ui.invert.checked !== ui.whiteBg.checked;
+  const tri = ui.mode.value === 'tricolor';
+  const lightBg = ui.whiteBg.checked && !tri;
+  const flip = ui.invert.checked !== lightBg;
   const atlas = getAtlas(chars);
 
   lctx.globalCompositeOperation = 'source-over';
@@ -179,8 +182,8 @@ function frame() {
   // 3. warnai karakter: source-in dengan gambar warna yang di-scale (pixelated)
   const mode = ui.mode.value;
   lctx.globalCompositeOperation = 'source-in';
-  if (mode === 'mono') {
-    lctx.fillStyle = ui.whiteBg.checked ? '#000' : '#fff';
+  if (mode === 'mono' || tri) {
+    lctx.fillStyle = lightBg ? '#000' : '#fff';
     lctx.fillRect(0, 0, W, H);
   } else if (matrix) {
     tctx.putImageData(mImg, 0, 0);
@@ -195,8 +198,18 @@ function frame() {
   }
 
   // 4. komposit ke layar
-  octx.fillStyle = ui.whiteBg.checked ? '#fff' : '#000';
-  octx.fillRect(0, 0, W, H);
+  if (tri) {
+    // tiga panel solid: hijau | biru | merah
+    const panels = ['#118a2c', '#0a2fa8', '#e00c0c'];
+    const pw = W / 3;
+    panels.forEach((c, i) => {
+      octx.fillStyle = c;
+      octx.fillRect(Math.floor(i * pw), 0, Math.ceil(pw) + 1, H);
+    });
+  } else {
+    octx.fillStyle = lightBg ? '#fff' : '#000';
+    octx.fillRect(0, 0, W, H);
+  }
   if (mode === 'block') {
     octx.imageSmoothingEnabled = false;
     octx.filter = 'brightness(0.4)';
