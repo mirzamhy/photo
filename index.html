@@ -22,6 +22,30 @@
   canvas#out { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
   #msg { position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); text-align:center; padding:16px; }
   video { display:none; }
+
+  /* photobooth */
+  #count { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none;
+    font:700 min(40vh, 40vw)/1 "Cascadia Mono", Consolas, monospace; color:#fff;
+    text-shadow:0 0 30px rgba(0,0,0,.8); opacity:0; transition:opacity .15s; }
+  #count.on { opacity:1; }
+  #flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; transition:opacity .4s ease-out; }
+  #flash.on { opacity:1; transition:none; }
+  #tray { position:absolute; left:12px; bottom:12px; display:flex; gap:8px; pointer-events:none; }
+  #tray canvas { height:64px; border:2px solid #fff; border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,.6); }
+  #shotInfo { position:absolute; top:12px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.6);
+    padding:4px 12px; border-radius:999px; font-weight:600; display:none; }
+  dialog { background:var(--panel); color:var(--fg); border:1px solid #333; border-radius:12px; padding:20px; max-width:min(560px, calc(100vw - 32px)); }
+  dialog::backdrop { background:rgba(0,0,0,.7); }
+  dialog h2 { margin:0 0 14px; font-size:18px; }
+  .opts { display:grid; gap:14px; }
+  .opts > div > span { display:block; color:var(--muted); margin-bottom:6px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chips label { color:var(--fg); background:#222; border:1px solid #333; border-radius:8px; padding:6px 10px; cursor:pointer; }
+  .chips label:has(input:checked) { border-color:var(--accent); background:#2a1a0e; }
+  .chips input { display:none; }
+  input[type=text] { width:100%; background:#222; color:var(--fg); border:1px solid #333; border-radius:6px; padding:7px 9px; font:inherit; }
+  .row { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; flex-wrap:wrap; }
+  #result img { display:block; max-width:100%; max-height:65vh; margin:0 auto; border-radius:4px; }
 </style>
 </head>
 <body>
@@ -51,7 +75,8 @@
   <label><input id="invert" type="checkbox"> Invert</label>
   <label><input id="mirror" type="checkbox" checked> Mirror</label>
   <label><input id="whiteBg" type="checkbox"> Bg putih</label>
-  <button id="snap">Snapshot PNG</button>
+  <button id="boothBtn">Photobooth</button>
+  <button id="snap" class="ghost">Snapshot PNG</button>
   <button id="pause" class="ghost">Pause</button>
   <button id="full" class="ghost">Fullscreen</button>
   <span id="fps"></span>
@@ -59,8 +84,56 @@
 <main id="stage">
   <p id="msg">Klik izinkan kamera…</p>
   <canvas id="out" hidden></canvas>
+  <div id="flash"></div>
+  <div id="count"></div>
+  <div id="shotInfo"></div>
+  <div id="tray"></div>
 </main>
 <video id="vid" playsinline muted></video>
+
+<dialog id="setup">
+  <h2>Photobooth</h2>
+  <div class="opts">
+    <div><span>Layout</span>
+      <div class="chips">
+        <label><input type="radio" name="layout" value="strip4" checked>Strip 4</label>
+        <label><input type="radio" name="layout" value="strip3">Strip 3</label>
+        <label><input type="radio" name="layout" value="grid">Grid 2×2</label>
+        <label><input type="radio" name="layout" value="single">1 foto</label>
+      </div>
+    </div>
+    <div><span>Hitung mundur</span>
+      <div class="chips">
+        <label><input type="radio" name="timer" value="3" checked>3 detik</label>
+        <label><input type="radio" name="timer" value="5">5 detik</label>
+        <label><input type="radio" name="timer" value="10">10 detik</label>
+      </div>
+    </div>
+    <div><span>Bingkai</span>
+      <div class="chips">
+        <label><input type="radio" name="frame" value="film" checked>Film hitam</label>
+        <label><input type="radio" name="frame" value="classic">Putih klasik</label>
+        <label><input type="radio" name="frame" value="receipt">Struk</label>
+        <label><input type="radio" name="frame" value="pink">Pink</label>
+      </div>
+    </div>
+    <div><span>Tulisan</span><input id="caption" type="text" maxlength="28" value="ASCII BOOTH"></div>
+  </div>
+  <div class="row">
+    <button class="ghost" id="cancelBooth">Batal</button>
+    <button id="startBooth">Mulai</button>
+  </div>
+</dialog>
+
+<dialog id="result">
+  <h2>Hasil photobooth</h2>
+  <img id="stripImg" alt="Strip foto ASCII">
+  <div class="row">
+    <button class="ghost" id="closeResult">Tutup</button>
+    <button class="ghost" id="retake">Ulangi</button>
+    <button id="download">Unduh PNG</button>
+  </div>
+</dialog>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -227,6 +300,155 @@ navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: {
   .then(stream => { vid.srcObject = stream; return vid.play(); })
   .then(() => { $('msg').remove(); out.hidden = false; frame(); })
   .catch(err => { $('msg').textContent = 'Kamera gagal: ' + err.message + ' — buka lewat localhost/https.'; });
+</script>
+
+<script>
+// ---------- Photobooth ----------
+const LAYOUTS = {
+  strip4: { cols: 1, rows: 4, pw: 600 },
+  strip3: { cols: 1, rows: 3, pw: 600 },
+  grid:   { cols: 2, rows: 2, pw: 520 },
+  single: { cols: 1, rows: 1, pw: 900 },
+};
+const FRAMES = {
+  film:    { bg: '#111',    ink: '#f2f2f2', sub: '#9a9a9a', line: '#000' },
+  classic: { bg: '#fff',    ink: '#111',    sub: '#777',    line: '#ddd' },
+  receipt: { bg: '#f5f2e9', ink: '#222',    sub: '#666',    line: '#222' },
+  pink:    { bg: '#ffc8dd', ink: '#6a1b3a', sub: '#a14d72', line: '#fff' },
+};
+const MONO = '"Cascadia Mono", Consolas, "Courier New", monospace';
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const pick = name => document.querySelector(`input[name=${name}]:checked`).value;
+
+let shots = [], lastStrip = null, running = false;
+
+$('boothBtn').onclick = () => { if (!running) $('setup').showModal(); };
+$('cancelBooth').onclick = () => $('setup').close();
+$('startBooth').onclick = () => { $('setup').close(); runBooth(); };
+$('closeResult').onclick = () => $('result').close();
+$('retake').onclick = () => { $('result').close(); runBooth(); };
+$('download').onclick = () => {
+  if (!lastStrip) return;
+  const a = document.createElement('a');
+  a.download = 'photobooth-' + Date.now() + '.png';
+  a.href = lastStrip.toDataURL('image/png');
+  a.click();
+};
+
+async function runBooth() {
+  if (running || out.hidden) return;
+  running = true;
+  paused = false; $('pause').textContent = 'Pause';
+  $('boothBtn').disabled = true;
+  const layout = LAYOUTS[pick('layout')];
+  const total = layout.cols * layout.rows;
+  const secs = +pick('timer');
+  shots = [];
+  $('tray').innerHTML = '';
+  const info = $('shotInfo'), count = $('count');
+  info.style.display = 'block';
+
+  for (let n = 0; n < total; n++) {
+    info.textContent = `Foto ${n + 1} / ${total}`;
+    for (let s = secs; s > 0; s--) {
+      count.textContent = s;
+      count.classList.add('on');
+      await wait(1000);
+    }
+    count.classList.remove('on');
+    // ambil frame tepat sebelum flash
+    const shot = document.createElement('canvas');
+    shot.width = out.width; shot.height = out.height;
+    shot.getContext('2d').drawImage(out, 0, 0);
+    shots.push(shot);
+    $('flash').classList.add('on');
+    requestAnimationFrame(() => requestAnimationFrame(() => $('flash').classList.remove('on')));
+    $('tray').appendChild(shot.cloneNode()).getContext('2d').drawImage(shot, 0, 0);
+    await wait(900);
+  }
+
+  info.style.display = 'none';
+  lastStrip = composeStrip(shots, layout, pick('frame'), $('caption').value.trim());
+  $('stripImg').src = lastStrip.toDataURL('image/png');
+  $('tray').innerHTML = '';
+  $('boothBtn').disabled = false;
+  running = false;
+  $('result').showModal();
+}
+
+function composeStrip(shots, L, frameKey, caption) {
+  const F = FRAMES[frameKey];
+  const film = frameKey === 'film', receipt = frameKey === 'receipt';
+  const PW = L.pw, PH = Math.round(PW * shots[0].height / shots[0].width);
+  const gap = 20, padX = film ? 70 : 34, padTop = receipt ? 120 : 34;
+  const footer = receipt ? 190 : 130;
+  const W = padX * 2 + L.cols * PW + (L.cols - 1) * gap;
+  const H = padTop + L.rows * PH + (L.rows - 1) * gap + footer;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const x = c.getContext('2d');
+
+  // latar
+  x.fillStyle = F.bg;
+  if (receipt) {
+    // tepi sobek zigzag atas-bawah
+    const z = 14;
+    x.beginPath(); x.moveTo(0, z);
+    for (let i = 0; i <= W; i += z * 2) { x.lineTo(i + z, 0); x.lineTo(i + z * 2, z); }
+    x.lineTo(W, H - z);
+    for (let i = W; i >= 0; i -= z * 2) { x.lineTo(i - z, H); x.lineTo(i - z * 2, H - z); }
+    x.closePath(); x.fill();
+  } else {
+    x.fillRect(0, 0, W, H);
+  }
+
+  // lubang film di dua sisi
+  if (film) {
+    x.fillStyle = '#e8e8e8';
+    for (let y = 18; y < H - 18; y += 44) {
+      for (const sx of [22, W - 22 - 26]) {
+        x.beginPath(); x.roundRect(sx, y, 26, 20, 4); x.fill();
+      }
+    }
+  }
+
+  x.textAlign = 'center';
+  x.fillStyle = F.ink;
+  if (receipt) {
+    x.font = `700 34px ${MONO}`;
+    x.fillText('*** ASCII BOOTH ***', W / 2, 64);
+    x.font = `20px ${MONO}`;
+    x.fillStyle = F.sub;
+    x.fillText('-'.repeat(Math.floor((W - 60) / 12)), W / 2, 96);
+  }
+
+  // foto
+  shots.forEach((s, i) => {
+    const cx = padX + (i % L.cols) * (PW + gap);
+    const cy = padTop + Math.floor(i / L.cols) * (PH + gap);
+    x.drawImage(s, cx, cy, PW, PH);
+    x.strokeStyle = F.line; x.lineWidth = 2;
+    x.strokeRect(cx + 1, cy + 1, PW - 2, PH - 2);
+  });
+
+  // tulisan bawah
+  const now = new Date();
+  const p2 = v => String(v).padStart(2, '0');
+  const stamp = `${p2(now.getDate())}.${p2(now.getMonth() + 1)}.${now.getFullYear()}  ${p2(now.getHours())}:${p2(now.getMinutes())}`;
+  let y = H - footer + 58;
+  if (receipt) {
+    x.font = `20px ${MONO}`; x.fillStyle = F.sub;
+    x.fillText('-'.repeat(Math.floor((W - 60) / 12)), W / 2, y - 22);
+    y += 12;
+  }
+  x.fillStyle = F.ink;
+  x.font = `700 ${L.cols > 1 ? 40 : 36}px ${MONO}`;
+  x.fillText(caption || 'ASCII BOOTH', W / 2, y);
+  x.font = `22px ${MONO}`; x.fillStyle = F.sub;
+  x.fillText(stamp, W / 2, y + 38);
+  if (receipt) x.fillText(`${shots.length} FOTO  ·  TERIMA KASIH`, W / 2, y + 72);
+  return c;
+}
 </script>
 </body>
 </html>
